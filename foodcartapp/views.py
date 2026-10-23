@@ -3,6 +3,7 @@ from django.templatetags.static import static
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from phonenumber_field.phonenumber import to_python
 
 from .models import Product, Order, OrderItem
 
@@ -62,30 +63,55 @@ def product_list_api(request):
 @api_view(['POST'])
 def register_order(request):
     order_data = request.data    
-        
-    try:
-        products = order_data['products']
-        
-        if products is None:
-            return Response(
-                {'products': 'Это поле не может быть пустым.'}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if not isinstance(products, list):
-            return Response(
-                {'products': f'Ожидался list со значениями, но был получен "{type(products).__name__}".'}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        if not products:
-            return Response(
-                {'products': 'Этот список не может быть пустым.'}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+    errors = {}
 
-    except KeyError:
-        return Response({'products': 'Обязательное поле.'}, status=status.HTTP_400_BAD_REQUEST)
+    fields = ['firstname', 'lastname', 'address', 'phonenumber']
+    
+    for field in fields:
+        if field not in order_data:
+            errors[field] = 'Обязательное поле.'
+            continue
+            
+        value = order_data[field]
+        
+        if value is None or value == '':
+            errors[field] = 'Это поле не может быть пустым.'
+            continue
+            
+        if not isinstance(value, str):
+            errors[field] = 'Not a valid string.'
+            continue
+
+        if field == 'phonenumber':
+            phone = to_python(value)
+            if not phone or not phone.is_valid():
+                errors['phonenumber'] = 'Введен некорректный номер телефона.'
+
+    if 'products' not in order_data:
+        errors['products'] = 'Обязательное поле.'
+    else:
+        products = order_data['products']
+        if products is None:
+            errors['products'] = 'Это поле не может быть пустым.'
+        elif not isinstance(products, list):
+            errors['products'] = f'Ожидался list со значениями, но был получен "{type(products).__name__}".'
+        elif not products:
+            errors['products'] = 'Этот список не может быть пустым.'
+        else:
+            for item in products:
+                if not isinstance(item, dict) or 'product' not in item:
+                    errors['products'] = 'Некорректная структура элемента списка.'
+                    break
+                
+                product_id = item['product']
+                try:
+                    Product.objects.get(id=product_id)
+                except Product.DoesNotExist:
+                    errors['products'] = f'Недопустимый первичный ключ "{product_id}"'
+                    break
+
+    if errors:
+        return Response(errors, status=status.HTTP_400_BAD_REQUEST)
     
     order = Order.objects.create(
         firstname=order_data['firstname'],
